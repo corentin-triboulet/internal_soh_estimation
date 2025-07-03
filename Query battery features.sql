@@ -10,24 +10,21 @@ DECLARE SoL_voltage FLOAT64 DEFAULT 54.6;
 WITH 
 battery_snapshot AS (
   SELECT
-    battery_id,
+    DISTINCT battery_id,
     battery_capacity,
     DATE_DIFF( date_registration_local,'2000-01-01', MONTH) AS age_month_ref_date_01_01_2000,
     is_broken,
     battery_sku,
     vendor_battery_id,
     battery_voltage,
-    tags,
+    EXISTS(SELECT 1 FROM UNNEST(tags) AS tag WHERE tag = "QB-92") AS is_QB_92,
     market_name
-  FROM `com-ridedott-data.bi_marts.dwd_dim_batteries`
+  FROM `com-ridedott-data.bi_marts.dwd_dim_batteries` --, UNNEST(tags) AS tag
   WHERE date_snapshot_local = CURRENT_DATE()
   AND battery_sku IN UNNEST(battery_sku_selected)
+  ORDER BY 1
 ),
 
-tags_list AS (
-  SELECT DISTINCT tag
-  FROM battery_snapshot, UNNEST(tags) AS tag
-),
  
 
 
@@ -82,27 +79,6 @@ agg_bmi AS(
   GROUP BY 1 
 ), 
 
-drainage AS(
-  SELECT 
-   battery_id
-
-  -- data
-  , battery_delta
-  , distance_geo_track/1000 distance_geo_track_km
-  , SAFE_DIVIDE(battery_delta,distance_geo_track/1000) in_ride_drainage_prct_km
-  -- time
-  , time_ride_start
-FROM `com-ridedott-data.tableau_custom_sql.dwd_fact_battery_efficiency`
-WHERE DATE(time_ride_start) BETWEEN start_date AND end_date
-),
-
-drainage_agg AS(
-  SELECT
-  battery_id
-  , PERCENTILE_CONT(in_ride_drainage_prct_km, 0.5) OVER (PARTITION BY battery_id) median_in_ride_drainage_prct_km
-  FROM drainage
-
-),
 
 
 main AS(
@@ -114,7 +90,7 @@ main AS(
   , battery_capacity
   , is_broken
   --, tags
-  , tag = "QB-92" AS QB_92
+  , is_QB_92
   , market_name
   , capacity_and_health_status
   , CAST(SAFE_MULTIPLY(capacity_and_health_status/100,battery_capacity)AS INT)  health_capacity
@@ -132,14 +108,11 @@ main AS(
   , soh_percentage
   , battery_cycles
 
-  , median_in_ride_drainage_prct_km
-  , median_in_ride_drainage_prct_km*battery_voltage/100/1000 median_in_ride_drainage_wh_km
-
-  FROM battery_snapshot, UNNEST(tags) AS tag 
+  FROM battery_snapshot
   LEFT JOIN bmi USING(vendor_battery_id)
   LEFT JOIN agg_bmi_soc100 AS agb_soc100 USING(vendor_battery_id)
   LEFT JOIN agg_bmi AS agb USING(vendor_battery_id)
-  LEFT JOIN drainage_agg AS da USING(battery_id)
+
 
   WHERE time_ranking = 1
 ), 
